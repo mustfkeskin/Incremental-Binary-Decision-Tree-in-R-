@@ -1,0 +1,463 @@
+rm(list=ls())
+library("foreign")
+
+#options nested recursive sayısını arttırmak için
+
+options(expressions=10000)
+IsPure <- function(data) {
+    length(unique(data[,ncol(data)])) == 1 
+}
+
+
+Entropy <- function( vls ) {
+    res <- vls/sum(vls) * log2(vls/sum(vls))
+    res[vls == 0] <- 0
+    -sum(res)
+}
+
+
+InformationGain <- function( tble ) {
+    tble <- as.data.frame.matrix(tble)
+    entropyBefore <- Entropy(colSums(tble))
+    s <- rowSums(tble)
+    entropyAfter <- sum (s / sum(s) * apply(tble, MARGIN = 1, FUN = Entropy ))
+    informationGain <- entropyBefore - entropyAfter
+    return (informationGain)
+}
+
+
+
+split_binary <- function(subdata,colname){
+	
+	if(class(subdata[,colname])=='numeric'){
+		max   <- 0
+		value <- 0
+		dif_values <- unique(subdata[,colname])
+		dif_values <- dif_values[order(dif_values)]  
+
+		
+		for(i in 1:(length(dif_values) - 1)){
+			dif_values[i] <- (dif_values[i] + dif_values[i + 1]) / 2
+		}
+		if(length(dif_values)>1){
+				dif_values <- dif_values[-length(dif_values)]
+		}
+		
+    
+		for (i in 1:length(dif_values)){
+			ig <- InformationGain(table(subdata[,colname] > dif_values[i], subdata[,ncol(subdata)]))
+			if(ig > max){
+				max   <- ig
+				value <- dif_values[i]
+			}
+		}
+		return(value)
+	} 
+
+   	
+}
+
+
+Predict <- function(parent, features) {
+  if(parent[4]=="TRUE") return (parent)
+  if(parent[2] <= features[parent[3]]){
+	child   <- tree[parent[5] == tree[,1],]	
+    }else{
+	child   <- tree[parent[6] == tree[,1],]
+  }
+  return (Predict(child, features))
+}
+
+
+Predict_Data <- function(parent, features,data) {
+  if (parent[4]=="TRUE") return (data)
+  if(parent[2] <= features[parent[3]]){
+	child <- tree[parent[5] == tree[,1],]
+	subdata <- data[data[,parent[3]] > parent[2],]
+    }else{
+	child <- tree[parent[6] == tree[,1],]
+	subdata <- data[data[,parent[3]] <= parent[2],]
+  }
+  return (Predict_Data(child, features, subdata))
+} 
+
+
+TrainID3 <- function(parent, data) {
+    
+    #if the data-set is pure  then
+    if (IsPure(data)) {
+	
+
+		#construct a leaf having the name of the pure feature 
+		parent[1]        <- parent[1]
+		parent[2]        <- unique(data[,ncol(data)])
+		parent[3]        <- tail(names(data), 1)
+		parent[4]        <- TRUE
+		parent[5]        <- 0
+		parent[6]        <- 0
+		tree[tree[,1] == as.numeric(parent[1]),]  <<- parent
+
+    } else {
+        #chose the feature with the highest information gain 
+        ig <- sapply(colnames(data)[-ncol(data)], 
+                     function(x) InformationGain(
+                         table(data[,x], data[,ncol(data)])
+                     )
+        )
+		
+
+        feature       <- names(ig)[ig == max(ig)][1]
+		value         <- split_binary(data,feature)
+			
+		parent[1]       <- parent[1]
+		parent[2]       <- value
+		parent[3]       <- feature
+		parent[4]       <- FALSE
+		parent[5]       <- as.numeric(parent[1]) * 2 + 1
+		parent[6]       <- as.numeric(parent[1]) * 2 + 2
+		tree[tree[,1] == as.numeric(parent[1]),] <<- parent
+		
+		colValue        <- 0
+		colName         <- ""
+		isLeaf          <- FALSE
+		childLeftIndex  <- 0
+		childRightIndex <- 0
+		
+		treeLeft  <- matrix(c( parent[5],value,colName,isLeaf,childLeftIndex,childRightIndex),nrow = 1,ncol = 6)
+		treeRight <- matrix(c( parent[6],value,colName,isLeaf,childLeftIndex,childRightIndex),nrow = 1,ncol = 6)
+		
+		tree <<- rbind(tree,treeLeft )
+		tree <<- rbind(tree,treeRight)
+		
+        childObsLeft  <- subset(data, data[,feature] >  value)
+        childObsRight <- subset(data, data[,feature] <= value)
+		
+		#call the algorithm recursively on the child and the subset      
+		TrainID3(treeLeft  , childObsLeft)
+		TrainID3(treeRight , childObsRight)
+	}
+      
+}
+
+
+cross_validation <- function(Nobs,K=5){
+    rs <- runif(Nobs)
+    id <- seq(Nobs)[order(rs)]
+    k <- as.integer(Nobs*seq(1,K-1)/K)
+    k <- matrix(c(0,rep(k,each=2),Nobs),ncol=2,byrow=TRUE)
+    k[,1] <- k[,1]+1
+    l <- lapply(seq.int(K),function(x,k,d) 
+        list(train=d[!(seq(d) %in% seq(k[x,1],k[x,2]))],
+             test=d[seq(k[x,1],k[x,2])]),k=k,d=id)
+    return(l)
+}
+
+
+
+path  <- "F:\\Ders\\Ders - Yüksek Lisans\\Kollektif Öğrenme\\HW2\\36uci\\iris.arff"
+data                        <- read.arff(path)
+
+
+
+index           <- 1
+value           <- 0
+colName         <- ""
+isLeaf          <- TRUE
+childLeftIndex  <- 0
+childRightIndex <- 0
+
+
+unik                        <- unique(data[,ncol(data)])
+tree                        <- matrix(c(index,value,colName,isLeaf,childLeftIndex,childRightIndex),nrow = 1,ncol = 6)
+root_index                  <- 1
+k                           <- 1
+accuracyResults             <- c()
+accuracyIncrementalResults  <- c()
+
+for(i in 1:20){
+
+print(paste(i))
+
+
+ if(k==1){
+        cv <<- cross_validation(dim(data)[1],2)
+        train_data <- data[unlist(cv[[1]][1]),]
+        test_data  <- data[unlist(cv[[1]][2]),]
+        k<-2
+    }else{
+        test_data  <- data[unlist(cv[[1]][1]),]
+        train_data <- data[unlist(cv[[1]][2]),]
+        k<-1
+    }
+
+		
+n               	  <- dim(train_data)[1] 
+
+
+
+#Incremental Decision
+train_data1                       <- train_data[seq(1,n/2),]
+incremental_train_data1           <- train_data[(sample(1:round(n/2) -1, size=n/2, replace=FALSE) + round(n/2) -1),]
+tree                              <- matrix(c(index,value,colName,isLeaf,childLeftIndex,childRightIndex),nrow = 1,ncol = 6)
+TrainID3(tree, train_data1)
+for(i in 1:dim(incremental_train_data1)[1]){
+	inc_pred <- Predict     (tree[root_index,],incremental_train_data1[i,])
+	inc_data <- Predict_Data(tree[root_index,],incremental_train_data1[i,],train_data1)
+	inc_data <- rbind(inc_data,incremental_train_data1[i,])
+	TrainID3(inc_pred, inc_data) 
+} 
+treeIncremental1   <- tree
+
+
+train_data2                       <- train_data[seq(1,n/2),]
+incremental_train_data2           <- train_data[(sample(1:round(n/2) -1, size=n/2, replace=FALSE) + round(n/2) -1),]
+tree                              <- matrix(c(index,value,colName,isLeaf,childLeftIndex,childRightIndex),nrow = 1,ncol = 6)
+TrainID3(tree, train_data2)
+for(i in 1:dim(incremental_train_data2)[1]){
+	inc_pred <- Predict     (tree[root_index,],incremental_train_data2[i,])
+	inc_data <- Predict_Data(tree[root_index,],incremental_train_data2[i,],train_data2)
+	inc_data <- rbind(inc_data,incremental_train_data2[i,])
+	TrainID3(inc_pred, inc_data) 
+} 
+treeIncremental2   <- tree
+
+
+train_data3                       <- train_data[seq(1,n/2),]
+incremental_train_data3           <- train_data[(sample(1:round(n/2) -1, size=n/2, replace=FALSE) + round(n/2) -1),]
+tree                              <- matrix(c(index,value,colName,isLeaf,childLeftIndex,childRightIndex),nrow = 1,ncol = 6)
+TrainID3(tree, train_data3)
+for(i in 1:dim(incremental_train_data3)[1]){
+	inc_pred <- Predict     (tree[root_index,],incremental_train_data3[i,])
+	inc_data <- Predict_Data(tree[root_index,],incremental_train_data3[i,],train_data3)
+	inc_data <- rbind(inc_data,incremental_train_data3[i,])
+	TrainID3(inc_pred, inc_data) 
+} 
+treeIncremental3   <- tree
+
+
+train_data4                       <- train_data[seq(1,n/2),]
+incremental_train_data4           <- train_data[(sample(1:round(n/2) -1, size=n/2, replace=FALSE) + round(n/2) -1),]
+tree                              <- matrix(c(index,value,colName,isLeaf,childLeftIndex,childRightIndex),nrow = 1,ncol = 6)
+TrainID3(tree, train_data4)
+for(i in 1:dim(incremental_train_data4)[1]){
+	inc_pred <- Predict     (tree[root_index,],incremental_train_data4[i,])
+	inc_data <- Predict_Data(tree[root_index,],incremental_train_data4[i,],train_data4)
+	inc_data <- rbind(inc_data,incremental_train_data4[i,])
+	TrainID3(inc_pred, inc_data) 
+} 
+treeIncremental4   <- tree
+
+
+train_data5                       <- train_data[seq(1,n/2),]
+incremental_train_data5           <- train_data[(sample(1:round(n/2) -1, size=n/2, replace=FALSE) + round(n/2) -1),]
+tree                              <- matrix(c(index,value,colName,isLeaf,childLeftIndex,childRightIndex),nrow = 1,ncol = 6)
+TrainID3(tree, train_data5)
+for(i in 1:dim(incremental_train_data5)[1]){
+	inc_pred <- Predict     (tree[root_index,],incremental_train_data5[i,])
+	inc_data <- Predict_Data(tree[root_index,],incremental_train_data5[i,],train_data5)
+	inc_data <- rbind(inc_data,incremental_train_data5[i,])
+	TrainID3(inc_pred, inc_data) 
+} 
+treeIncremental5   <- tree
+
+
+train_data6                       <- train_data[seq(1,n/2),]
+incremental_train_data6           <- train_data[(sample(1:round(n/2) -1, size=n/2, replace=FALSE) + round(n/2) -1),]
+tree                              <- matrix(c(index,value,colName,isLeaf,childLeftIndex,childRightIndex),nrow = 1,ncol = 6)
+TrainID3(tree, train_data6)
+for(i in 1:dim(incremental_train_data6)[1]){
+	inc_pred <- Predict     (tree[root_index,],incremental_train_data6[i,])
+	inc_data <- Predict_Data(tree[root_index,],incremental_train_data6[i,],train_data6)
+	inc_data <- rbind(inc_data,incremental_train_data6[i,])
+	TrainID3(inc_pred, inc_data) 
+} 
+treeIncremental6   <- tree
+
+
+train_data7                       <- train_data[seq(1,n/2),]
+incremental_train_data7           <- train_data[(sample(1:round(n/2) -1, size=n/2, replace=FALSE) + round(n/2) -1),]
+tree                              <- matrix(c(index,value,colName,isLeaf,childLeftIndex,childRightIndex),nrow = 1,ncol = 6)
+TrainID3(tree, train_data7)
+for(i in 1:dim(incremental_train_data7)[1]){
+	inc_pred <- Predict     (tree[root_index,],incremental_train_data7[i,])
+	inc_data <- Predict_Data(tree[root_index,],incremental_train_data7[i,],train_data7)
+	inc_data <- rbind(inc_data,incremental_train_data7[i,])
+	TrainID3(inc_pred, inc_data) 
+} 
+treeIncremental7   <- tree
+
+
+train_data8                       <- train_data[seq(1,n/2),]
+incremental_train_data8           <- train_data[(sample(1:round(n/2) -1, size=n/2, replace=FALSE) + round(n/2) -1),]
+tree                              <- matrix(c(index,value,colName,isLeaf,childLeftIndex,childRightIndex),nrow = 1,ncol = 6)
+TrainID3(tree, train_data8)
+for(i in 1:dim(incremental_train_data8)[1]){
+	inc_pred <- Predict     (tree[root_index,],incremental_train_data8[i,])
+	inc_data <- Predict_Data(tree[root_index,],incremental_train_data8[i,],train_data8)
+	inc_data <- rbind(inc_data,incremental_train_data8[i,])
+	TrainID3(inc_pred, inc_data) 
+} 
+treeIncremental8   <- tree
+
+
+
+train_data9                       <- train_data[seq(1,n/2),]
+incremental_train_data9           <- train_data[(sample(1:round(n/2) -1, size=n/2, replace=FALSE) + round(n/2) -1),]
+tree                              <- matrix(c(index,value,colName,isLeaf,childLeftIndex,childRightIndex),nrow = 1,ncol = 6)
+TrainID3(tree, train_data9)
+for(i in 1:dim(incremental_train_data9)[1]){
+	inc_pred <- Predict     (tree[root_index,],incremental_train_data9[i,])
+	inc_data <- Predict_Data(tree[root_index,],incremental_train_data9[i,],train_data9)
+	inc_data <- rbind(inc_data,incremental_train_data9[i,])
+	TrainID3(inc_pred, inc_data) 
+} 
+treeIncremental9   <- tree
+
+
+train_data10                       <- train_data[seq(1,n/2),]
+incremental_train_data10           <- train_data[(sample(1:round(n/2) -1, size=n/2, replace=FALSE) + round(n/2) -1),]
+tree                               <- matrix(c(index,value,colName,isLeaf,childLeftIndex,childRightIndex),nrow = 1,ncol = 6)
+TrainID3(tree, train_data10)
+for(i in 1:dim(incremental_train_data10)[1]){
+	inc_pred <- Predict     (tree[root_index,],incremental_train_data10[i,])
+	inc_data <- Predict_Data(tree[root_index,],incremental_train_data10[i,],train_data10)
+	inc_data <- rbind(inc_data,incremental_train_data10[i,])
+	TrainID3(inc_pred, inc_data) 
+} 
+treeIncremental10   <- tree
+
+
+
+#Bagging
+train_data1           <- sample(1:n, size=n, replace=TRUE)
+train_data1           <- train_data[train_data1,]
+tree                  <- matrix(c(index,value,colName,isLeaf,childLeftIndex,childRightIndex),nrow = 1,ncol = 6)
+TrainID3(tree, train_data1) 
+tree1                 <- tree
+
+
+train_data2           <- sample(1:n, size=n, replace=TRUE)
+train_data2           <- train_data[train_data2,]
+tree                  <- matrix(c(index,value,colName,isLeaf,childLeftIndex,childRightIndex),nrow = 1,ncol = 6)
+TrainID3(tree, train_data2) 
+tree2                 <- tree
+
+
+train_data3           <- sample(1:n, size=n, replace=TRUE)
+train_data3           <- train_data[train_data3,]
+tree                  <- matrix(c(index,value,colName,isLeaf,childLeftIndex,childRightIndex),nrow = 1,ncol = 6)
+TrainID3(tree, train_data3) 
+tree3                <- tree
+
+
+train_data4           <- sample(1:n, size=n, replace=TRUE)
+train_data4           <- train_data[train_data4,]
+tree                  <- matrix(c(index,value,colName,isLeaf,childLeftIndex,childRightIndex),nrow = 1,ncol = 6)
+TrainID3(tree, train_data4) 
+tree4                 <- tree
+
+
+train_data5           <- sample(1:n, size=n, replace=TRUE)
+train_data5           <- train_data[train_data5,]
+tree                  <- matrix(c(index,value,colName,isLeaf,childLeftIndex,childRightIndex),nrow = 1,ncol = 6)
+TrainID3(tree, train_data5) 
+tree5                 <- tree
+
+
+train_data6           <- sample(1:n, size=n, replace=TRUE)
+train_data6           <- train_data[train_data6,]
+tree                  <- matrix(c(index,value,colName,isLeaf,childLeftIndex,childRightIndex),nrow = 1,ncol = 6)
+TrainID3(tree, train_data6) 
+tree6                 <- tree
+
+
+train_data7           <- sample(1:n, size=n, replace=TRUE)
+train_data7           <- train_data[train_data7,]
+tree                  <- matrix(c(index,value,colName,isLeaf,childLeftIndex,childRightIndex),nrow = 1,ncol = 6)
+TrainID3(tree, train_data7) 
+tree7                 <- tree 
+
+
+train_data8           <- sample(1:n, size=n, replace=TRUE)
+train_data8           <- train_data[train_data8,]
+tree                  <- matrix(c(index,value,colName,isLeaf,childLeftIndex,childRightIndex),nrow = 1,ncol = 6)
+TrainID3(tree, train_data8) 
+tree8                 <- tree
+
+
+train_data9           <- sample(1:n, size=n, replace=TRUE)
+train_data9           <- train_data[train_data9,]
+tree                  <- matrix(c(index,value,colName,isLeaf,childLeftIndex,childRightIndex),nrow = 1,ncol = 6)
+TrainID3(tree, train_data9) 
+tree9                 <- tree
+
+train_data10          <- sample(1:n, size=n, replace=TRUE)
+train_data10          <- data[train_data10,]
+tree                  <- matrix(c(index,value,colName,isLeaf,childLeftIndex,childRightIndex),nrow = 1,ncol = 6)
+TrainID3(tree, train_data10) 
+tree10                <- tree
+
+
+accuracy              <- 0
+accuracyIncremental   <- 0
+
+for(i in 1:dim(test_data)[1]){
+
+    tahmin1  <- Predict(tree1 [root_index,],test_data[i,])[2]
+	tahmin2  <- Predict(tree2 [root_index,],test_data[i,])[2]
+	tahmin3  <- Predict(tree3 [root_index,],test_data[i,])[2]
+	tahmin4  <- Predict(tree4 [root_index,],test_data[i,])[2]
+	tahmin5  <- Predict(tree5 [root_index,],test_data[i,])[2]
+	tahmin6  <- Predict(tree6 [root_index,],test_data[i,])[2]
+	tahmin7  <- Predict(tree7 [root_index,],test_data[i,])[2]
+	tahmin8  <- Predict(tree8 [root_index,],test_data[i,])[2]
+	tahmin9  <- Predict(tree9 [root_index,],test_data[i,])[2]
+	tahmin10 <- Predict(tree10[root_index,],test_data[i,])[2]
+	
+	tahminIncremental1  <- Predict(treeIncremental1 [root_index,],test_data[i,])[2]
+	tahminIncremental2  <- Predict(treeIncremental2 [root_index,],test_data[i,])[2]
+	tahminIncremental3  <- Predict(treeIncremental3 [root_index,],test_data[i,])[2]
+	tahminIncremental4  <- Predict(treeIncremental4 [root_index,],test_data[i,])[2]
+	tahminIncremental5  <- Predict(treeIncremental5 [root_index,],test_data[i,])[2]
+	tahminIncremental6  <- Predict(treeIncremental6 [root_index,],test_data[i,])[2]
+	tahminIncremental7  <- Predict(treeIncremental7 [root_index,],test_data[i,])[2]
+	tahminIncremental8  <- Predict(treeIncremental8 [root_index,],test_data[i,])[2]
+	tahminIncremental9  <- Predict(treeIncremental9 [root_index,],test_data[i,])[2]
+	tahminIncremental10 <- Predict(treeIncremental10[root_index,],test_data[i,])[2]
+	
+	tableTahmin <- c(tahmin1, tahmin2, tahmin3, tahmin4, tahmin5, tahmin6, tahmin7, tahmin8, tahmin9, tahmin10)
+	tahmin      <- names(which(table(tableTahmin) == max(table(tableTahmin))))[1]
+	
+	tableIncremental  <- c(tahminIncremental1, tahminIncremental2, tahminIncremental3, tahminIncremental4, tahminIncremental5,
+                           tahminIncremental6, tahminIncremental7, tahminIncremental8, tahminIncremental9, tahminIncremental10)
+	tahminIncremental <- names(which(table(tableIncremental) == max(table(tableIncremental))))[1]					  
+
+    
+    if(unik[as.numeric(tahmin)] == test_data[i,ncol(test_data)]){
+        accuracy <- accuracy + 1
+    }
+	 if(unik[as.numeric(tahminIncremental)] == test_data[i,ncol(test_data)]){
+        accuracyIncremental <- accuracyIncremental + 1
+    }
+	
+}
+
+accuracyResults            <- c(accuracyResults,            (accuracy / dim(test_data)[1] * 100))
+accuracyIncrementalResults <- c(accuracyIncrementalResults, (accuracyIncremental / dim(test_data)[1] * 100))
+
+}
+
+t.test(accuracyResults ,accuracyIncrementalResults, paired=TRUE)
+
+
+
+
+
+
+
+#path  <- "F:\\Ders\\Ders - Yüksek Lisans\\Kollektif Öğrenme\\HW2\\36uci"
+#files <- list.files(path,pattern = "\\.arff$")
+
+#for(i in 1:length(files)){
+#   data <- read.arff(paste(path, files[i], sep = "\\"))
+#}
